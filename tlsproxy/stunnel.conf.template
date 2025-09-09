@@ -1,7 +1,8 @@
 # tlsproxy/stunnel.conf.template
 
 debug = 7
-output = /var/log/stunnel.log
+foreground = yes
+output = /dev/stdout
 socket = l:TCP_NODELAY=1
 socket = r:TCP_NODELAY=1
 
@@ -16,10 +17,11 @@ connect = @CONNECT_HOST@:@CONNECT_PORT@
 verify = 2
 CAfile = /certs/ca/ca.crt
 
-; --- Engine à activer au niveau service uniquement si cert+key dans le HSM ---
+; --- moteur OpenSSL sélectionné pour ce service ---
 @ENGINE_SERVICE@
 
 ; --- Lignes cert/key injectées par l’entrypoint ---
+;    (en mode PKCS#11: URIs RFC7512)
 @CERT_LINE@
 @KEY_LINE@
 

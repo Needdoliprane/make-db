@@ -91,6 +91,19 @@ services:
       start_period: 2s
     depends_on: [ pg-pkcs11, softhsm ]
 
+  pg-pkcs11-client:
+    image: alpine:3.20
+    command: sh -c "apk add --no-cache stunnel && stunnel /etc/stunnel/stunnel.conf"
+    volumes:
+      - ./certs:/certs:ro
+      - ./tlsproxy/stunnel-client.conf:/etc/stunnel/stunnel.conf:ro
+    networks: [ dbnet ]
+    healthcheck:
+      test: [ "CMD-SHELL", "busybox netstat -tln | grep -q :15432" ]
+      interval: 3s
+      timeout: 2s
+      retries: 30
+
   # --- Seeder (PostgreSQL only) ---
   seeder-pg:
     build: ./seeder
@@ -114,8 +127,8 @@ services:
       PG_MTLS_PORT: "5432"
 
       # PKCS#11 via proxy (mTLS + clé serveur en HSM)
-      PG_PKCS11_HOST: "pg-pkcs11-frontend"
-      PG_PKCS11_PORT: "${PG_PKCS11_PORT}"
+      PG_PKCS11_HOST: "pg-pkcs11-client"
+      PG_PKCS11_PORT: "15432"
 
       POSTGRES_USER: "${POSTGRES_USER}"
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
