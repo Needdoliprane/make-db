@@ -1,0 +1,122 @@
+networks:
+  dbnet:
+    external: true
+
+volumes:
+  softhsm:
+    external: true
+
+services:
+  mongo-mdp:
+    image: mongo:7
+    container_name: mongo_mdp
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: "${MONGO_INITDB_ROOT_USERNAME}"
+      MONGO_INITDB_ROOT_PASSWORD: "${MONGO_INITDB_ROOT_PASSWORD}"
+    command: [ "--auth" ]
+    ports: [ "${MONGO_MDP_PORT}:27017" ]
+    networks: [ dbnet ]
+
+  mongo-tls:
+    image: mongo:7
+    container_name: mongo_tls_db
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: "${MONGO_INITDB_ROOT_USERNAME}"
+      MONGO_INITDB_ROOT_PASSWORD: "${MONGO_INITDB_ROOT_PASSWORD}"
+    command: [ "--auth" ]
+    networks: [ dbnet ]
+
+  mongo-mtls:
+    image: mongo:7
+    container_name: mongo_mtls_db
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: "${MONGO_INITDB_ROOT_USERNAME}"
+      MONGO_INITDB_ROOT_PASSWORD: "${MONGO_INITDB_ROOT_PASSWORD}"
+    command: [ "--auth" ]
+    networks: [ dbnet ]
+
+  mongo-pkcs11:
+    image: mongo:7
+    container_name: mongo_pkcs11_db
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: "${MONGO_INITDB_ROOT_USERNAME}"
+      MONGO_INITDB_ROOT_PASSWORD: "${MONGO_INITDB_ROOT_PASSWORD}"
+    command: [ "--auth" ]
+    networks: [ dbnet ]
+
+  mongo-tls-frontend:
+    build: ./tlsproxy
+    container_name: mongo_tls_front
+    environment:
+      SERVICE_NAME: "mongo_tls"
+      ACCEPT_PORT: "${MONGO_TLS_PORT}"
+      CONNECT_HOST: "mongo_tls_db"
+      CONNECT_PORT: "27017"
+      REQUIRE_CLIENT_CERT: "tls"
+      ENABLE_PKCS11: "0"
+      PKCS11_URI: ""
+    ports: [ "${MONGO_TLS_PORT}:${MONGO_TLS_PORT}" ]
+    volumes: [ "${CERTS_DIR}:/certs:ro" ]
+    networks: [ dbnet ]
+    depends_on: [ mongo-tls ]
+
+  mongo-mtls-frontend:
+    build: ./tlsproxy
+    container_name: mongo_mtls_front
+    environment:
+      SERVICE_NAME: "mongo_mtls"
+      ACCEPT_PORT: "${MONGO_MTLS_PORT}"
+      CONNECT_HOST: "mongo_mtls_db"
+      CONNECT_PORT: "27017"
+      REQUIRE_CLIENT_CERT: "mtls"
+      ENABLE_PKCS11: "0"
+      PKCS11_URI: ""
+    ports: [ "${MONGO_MTLS_PORT}:${MONGO_MTLS_PORT}" ]
+    volumes: [ "${CERTS_DIR}:/certs:ro" ]
+    networks: [ dbnet ]
+    depends_on: [ mongo-mtls ]
+
+  mongo-pkcs11-frontend:
+    build: ./tlsproxy
+    container_name: mongo_pkcs11_front
+    environment:
+      SERVICE_NAME: "mongo_pkcs11"
+      ACCEPT_PORT: "${MONGO_PKCS11_PORT}"
+      CONNECT_HOST: "mongo_pkcs11_db"
+      CONNECT_PORT: "27017"
+      REQUIRE_CLIENT_CERT: "mtls"
+      ENABLE_PKCS11: "1"
+      PKCS11_URI: "pkcs11:token=${SOFTHSM_TOKEN_LABEL};object=${PKCS11_KEY_LABEL_PREFIX}-mongo;type=private"
+    ports: [ "${MONGO_PKCS11_PORT}:${MONGO_PKCS11_PORT}" ]
+    volumes: [ "${CERTS_DIR}:/certs:ro", "softhsm:/var/lib/softhsm" ]
+    networks: [ dbnet ]
+    depends_on: [ mongo-pkcs11, softhsm ]
+
+  seeder-mongo:
+    build: ./seeder
+    container_name: seeder_mongo
+    environment:
+      DB_COUNT: "${DB_COUNT}"
+      RECORDS_PER_DB: "${RECORDS_PER_DB}"
+      MIN_TABLES: "${MIN_TABLES}"
+      MAX_TABLES: "${MAX_TABLES}"
+      MONGO_MDP_HOST: "mongo-mdp"
+      MONGO_MDP_PORT: "27017"
+      MONGO_TLS_HOST: "mongo-tls-frontend"
+      MONGO_TLS_PORT: "${MONGO_TLS_PORT}"
+      MONGO_MTLS_HOST: "mongo-mtls-frontend"
+      MONGO_MTLS_PORT: "${MONGO_MTLS_PORT}"
+      MONGO_PKCS11_HOST: "mongo-pkcs11-frontend"
+      MONGO_PKCS11_PORT: "${MONGO_PKCS11_PORT}"
+      MONGO_INITDB_ROOT_USERNAME: "${MONGO_INITDB_ROOT_USERNAME}"
+      MONGO_INITDB_ROOT_PASSWORD: "${MONGO_INITDB_ROOT_PASSWORD}"
+      TLS_CA_FILE: "/certs/ca/ca.crt"
+      TLS_CLIENT_CERT: "/certs/client/client.crt"
+      TLS_CLIENT_KEY: "/certs/client/client.key"
+    volumes: [ "${CERTS_DIR}:/certs:ro" ]
+    networks: [ dbnet ]
+    depends_on:
+      - mongo-mdp
+      - mongo-tls-frontend
+      - mongo-mtls-frontend
+      - mongo-pkcs11-frontend

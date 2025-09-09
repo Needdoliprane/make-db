@@ -1,0 +1,109 @@
+networks:
+  dbnet:
+    external: true
+
+volumes:
+  softhsm:
+    external: true
+
+services:
+  mariadb-mdp:
+    image: mariadb:11.4
+    container_name: mariadb_mdp
+    environment: { MARIADB_ROOT_PASSWORD: "${MARIADB_ROOT_PASSWORD}" }
+    ports: [ "${MARIADB_MDP_PORT}:3306" ]
+    networks: [ dbnet ]
+
+  mariadb-tls:
+    image: mariadb:11.4
+    container_name: mariadb_tls_db
+    environment: { MARIADB_ROOT_PASSWORD: "${MARIADB_ROOT_PASSWORD}" }
+    networks: [ dbnet ]
+
+  mariadb-mtls:
+    image: mariadb:11.4
+    container_name: mariadb_mtls_db
+    environment: { MARIADB_ROOT_PASSWORD: "${MARIADB_ROOT_PASSWORD}" }
+    networks: [ dbnet ]
+
+  mariadb-pkcs11:
+    image: mariadb:11.4
+    container_name: mariadb_pkcs11_db
+    environment: { MARIADB_ROOT_PASSWORD: "${MARIADB_ROOT_PASSWORD}" }
+    networks: [ dbnet ]
+
+  mariadb-tls-frontend:
+    build: ./tlsproxy
+    container_name: mariadb_tls_front
+    environment:
+      SERVICE_NAME: "mariadb_tls"
+      ACCEPT_PORT: "${MARIADB_TLS_PORT}"
+      CONNECT_HOST: "mariadb_tls_db"
+      CONNECT_PORT: "3306"
+      REQUIRE_CLIENT_CERT: "tls"
+      ENABLE_PKCS11: "0"
+      PKCS11_URI: ""
+    ports: [ "${MARIADB_TLS_PORT}:${MARIADB_TLS_PORT}" ]
+    volumes: [ "${CERTS_DIR}:/certs:ro" ]
+    networks: [ dbnet ]
+    depends_on: [ mariadb-tls ]
+
+  mariadb-mtls-frontend:
+    build: ./tlsproxy
+    container_name: mariadb_mtls_front
+    environment:
+      SERVICE_NAME: "mariadb_mtls"
+      ACCEPT_PORT: "${MARIADB_MTLS_PORT}"
+      CONNECT_HOST: "mariadb_mtls_db"
+      CONNECT_PORT: "3306"
+      REQUIRE_CLIENT_CERT: "mtls"
+      ENABLE_PKCS11: "0"
+      PKCS11_URI: ""
+    ports: [ "${MARIADB_MTLS_PORT}:${MARIADB_MTLS_PORT}" ]
+    volumes: [ "${CERTS_DIR}:/certs:ro" ]
+    networks: [ dbnet ]
+    depends_on: [ mariadb-mtls ]
+
+  mariadb-pkcs11-frontend:
+    build: ./tlsproxy
+    container_name: mariadb_pkcs11_front
+    environment:
+      SERVICE_NAME: "mariadb_pkcs11"
+      ACCEPT_PORT: "${MARIADB_PKCS11_PORT}"
+      CONNECT_HOST: "mariadb_pkcs11_db"
+      CONNECT_PORT: "3306"
+      REQUIRE_CLIENT_CERT: "mtls"
+      ENABLE_PKCS11: "1"
+      PKCS11_URI: "pkcs11:token=${SOFTHSM_TOKEN_LABEL};object=${PKCS11_KEY_LABEL_PREFIX}-mariadb;type=private"
+    ports: [ "${MARIADB_PKCS11_PORT}:${MARIADB_PKCS11_PORT}" ]
+    volumes: [ "${CERTS_DIR}:/certs:ro", "softhsm:/var/lib/softhsm" ]
+    networks: [ dbnet ]
+    depends_on: [ mariadb-pkcs11, softhsm ]
+
+  seeder-mariadb:
+    build: ./seeder
+    container_name: seeder_mariadb
+    environment:
+      DB_COUNT: "${DB_COUNT}"
+      RECORDS_PER_DB: "${RECORDS_PER_DB}"
+      MIN_TABLES: "${MIN_TABLES}"
+      MAX_TABLES: "${MAX_TABLES}"
+      MARIADB_MDP_HOST: "mariadb-mdp"
+      MARIADB_MDP_PORT: "3306"
+      MARIADB_TLS_HOST: "mariadb-tls-frontend"
+      MARIADB_TLS_PORT: "${MARIADB_TLS_PORT}"
+      MARIADB_MTLS_HOST: "mariadb-mtls-frontend"
+      MARIADB_MTLS_PORT: "${MARIADB_MTLS_PORT}"
+      MARIADB_PKCS11_HOST: "mariadb-pkcs11-frontend"
+      MARIADB_PKCS11_PORT: "${MARIADB_PKCS11_PORT}"
+      MARIADB_ROOT_PASSWORD: "${MARIADB_ROOT_PASSWORD}"
+      TLS_CA_FILE: "/certs/ca/ca.crt"
+      TLS_CLIENT_CERT: "/certs/client/client.crt"
+      TLS_CLIENT_KEY: "/certs/client/client.key"
+    volumes: [ "${CERTS_DIR}:/certs:ro" ]
+    networks: [ dbnet ]
+    depends_on:
+      - mariadb-mdp
+      - mariadb-tls-frontend
+      - mariadb-mtls-frontend
+      - mariadb-pkcs11-frontend

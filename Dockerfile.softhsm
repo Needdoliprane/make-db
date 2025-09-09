@@ -1,0 +1,6 @@
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    softhsm2 opensc p11-kit ca-certificates bash \
+    && rm -rf /var/lib/apt/lists/*
+# fichier conf par défaut (Debian en fournit un)
+CMD ["bash","-lc","sleep infinity"]

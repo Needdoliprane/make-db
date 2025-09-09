@@ -1,0 +1,23 @@
+networks:
+  dbnet:
+    external: true
+    name: dbnet
+
+volumes:
+  softhsm:
+    name: softhsm
+
+services:
+  softhsm:
+    build:
+      context: .
+      dockerfile: Dockerfile.softhsm
+    container_name: softhsm
+    environment:
+      SOFTHSM2_CONF: /etc/softhsm2.conf
+    volumes:
+      - softhsm:/var/lib/softhsm
+    networks:
+      dbnet:
+        aliases:
+          - softhsm

@@ -1,0 +1,134 @@
+networks:
+  dbnet:
+    external: true
+
+volumes:
+  softhsm:
+    external: true
+
+services:
+  # --- PostgreSQL (mdp/plain) ---
+  pg-mdp:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+    ports: [ "${PG_MDP_PORT}:5432" ]
+    networks:
+      dbnet:
+        aliases:
+          - pg-mdp
+
+  # --- PostgreSQL TLS natif (pas de proxy) ---
+  pg-tls:
+    build: ./postgres-ssl
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      REQUIRE_CLIENT_CERT: "0"
+    volumes:
+      - "./certs/:/certs:ro"
+    ports: [ "${PG_TLS_PORT}:5432" ]
+    networks:
+      dbnet:
+        aliases:
+          - pg-tls
+
+  # --- PostgreSQL mTLS natif (pas de proxy) ---
+  pg-mtls:
+    build: ./postgres-ssl
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      REQUIRE_CLIENT_CERT: "1"
+    volumes:
+      - "./certs/:/certs:ro"
+    ports: [ "${PG_MTLS_PORT}:5432" ]
+    networks:
+      dbnet:
+        aliases:
+          - pg-mtls
+
+  # --- PostgreSQL pour PKCS#11 (DB vanilla, terminée par proxy stunnel en mTLS + clé HSM) ---
+  pg-pkcs11:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+    networks:
+      dbnet:
+        aliases:
+          - pg-pkcs11
+
+  # --- Frontend stunnel uniquement pour PKCS#11 ---
+  pg-pkcs11-frontend:
+    build: ./tlsproxy
+    hostname: pg-pkcs11-frontend
+    environment:
+      SERVICE_NAME: "pg_pkcs11"
+      ACCEPT_PORT: "${PG_PKCS11_PORT}"
+      CONNECT_HOST: "pg-pkcs11"
+      CONNECT_PORT: "5432"
+      REQUIRE_CLIENT_CERT: "mtls"
+      ENABLE_PKCS11: "1"
+      SOFTHSM_TOKEN_LABEL: "${SOFTHSM_TOKEN_LABEL}"
+      SOFTHSM_USER_PIN: "${SOFTHSM_USER_PIN}"
+      SOFTHSM2_CONF: "/etc/softhsm2.conf"
+      OPENSSL_CONF: "/etc/ssl/openssl-pkcs11.cnf"
+    ports: [ "${PG_PKCS11_PORT}:${PG_PKCS11_PORT}" ]
+    volumes:
+      - "./certs/:/certs:ro"
+      - "softhsm:/var/lib/softhsm"
+    networks:
+      dbnet:
+        aliases:
+          - pg-pkcs11-frontend
+    healthcheck:
+      test: [ "CMD", "sh", "-lc", "command -v nc >/dev/null 2>&1 || (apt-get update && apt-get install -y netcat-openbsd >/dev/null); nc -z localhost ${PG_PKCS11_PORT}" ]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+      start_period: 2s
+    depends_on: [ pg-pkcs11, softhsm ]
+
+  # --- Seeder (PostgreSQL only) ---
+  seeder-pg:
+    build: ./seeder
+    container_name: seeder_pg
+    environment:
+      DB_COUNT: "${DB_COUNT}"
+      RECORDS_PER_DB: "${RECORDS_PER_DB}"
+      MIN_TABLES: "${MIN_TABLES}"
+      MAX_TABLES: "${MAX_TABLES}"
+
+      # mdp/plain
+      PG_MDP_HOST: "pg-mdp"
+      PG_MDP_PORT: "5432"
+
+      # TLS natif (connexion directe au serveur PG)
+      PG_TLS_HOST: "pg-tls"
+      PG_TLS_PORT: "5432"
+
+      # mTLS natif (connexion directe au serveur PG)
+      PG_MTLS_HOST: "pg-mtls"
+      PG_MTLS_PORT: "5432"
+
+      # PKCS#11 via proxy (mTLS + clé serveur en HSM)
+      PG_PKCS11_HOST: "pg-pkcs11-frontend"
+      PG_PKCS11_PORT: "${PG_PKCS11_PORT}"
+
+      POSTGRES_USER: "${POSTGRES_USER}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+
+      # chemins TLS pour le client
+      TLS_CA_FILE: "/certs/ca/ca.crt"
+      TLS_CLIENT_CERT: "/certs/client/client.crt"
+      TLS_CLIENT_KEY: "/certs/client/client.key"
+    volumes:
+      - "./certs/:/certs:ro"
+    networks: [ dbnet ]
+    depends_on:
+      - pg-mdp
+      - pg-tls
+      - pg-mtls
+      - pg-pkcs11-frontend

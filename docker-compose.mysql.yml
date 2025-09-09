@@ -1,0 +1,113 @@
+networks:
+  dbnet:
+    external: true
+
+volumes:
+  softhsm:
+    external: true
+
+services:
+  mysql-mdp:
+    image: mysql:8
+    container_name: mysql_mdp
+    environment: { MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}" }
+    command: [ "--default-authentication-plugin=mysql_native_password" ]
+    ports: [ "${MYSQL_MDP_PORT}:3306" ]
+    networks: [ dbnet ]
+
+  mysql-tls:
+    image: mysql:8
+    container_name: mysql_tls_db
+    environment: { MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}" }
+    command: [ "--default-authentication-plugin=mysql_native_password" ]
+    networks: [ dbnet ]
+
+  mysql-mtls:
+    image: mysql:8
+    container_name: mysql_mtls_db
+    environment: { MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}" }
+    command: [ "--default-authentication-plugin=mysql_native_password" ]
+    networks: [ dbnet ]
+
+  mysql-pkcs11:
+    image: mysql:8
+    container_name: mysql_pkcs11_db
+    environment: { MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}" }
+    command: [ "--default-authentication-plugin=mysql_native_password" ]
+    networks: [ dbnet ]
+
+  mysql-tls-frontend:
+    build: ./tlsproxy
+    container_name: mysql_tls_front
+    environment:
+      SERVICE_NAME: "mysql_tls"
+      ACCEPT_PORT: "${MYSQL_TLS_PORT}"
+      CONNECT_HOST: "mysql_tls_db"
+      CONNECT_PORT: "3306"
+      REQUIRE_CLIENT_CERT: "tls"
+      ENABLE_PKCS11: "0"
+      PKCS11_URI: ""
+    ports: [ "${MYSQL_TLS_PORT}:${MYSQL_TLS_PORT}" ]
+    volumes: [ "${CERTS_DIR}:/certs:ro" ]
+    networks: [ dbnet ]
+    depends_on: [ mysql-tls ]
+
+  mysql-mtls-frontend:
+    build: ./tlsproxy
+    container_name: mysql_mtls_front
+    environment:
+      SERVICE_NAME: "mysql_mtls"
+      ACCEPT_PORT: "${MYSQL_MTLS_PORT}"
+      CONNECT_HOST: "mysql_mtls_db"
+      CONNECT_PORT: "3306"
+      REQUIRE_CLIENT_CERT: "mtls"
+      ENABLE_PKCS11: "0"
+      PKCS11_URI: ""
+    ports: [ "${MYSQL_MTLS_PORT}:${MYSQL_MTLS_PORT}" ]
+    volumes: [ "${CERTS_DIR}:/certs:ro" ]
+    networks: [ dbnet ]
+    depends_on: [ mysql-mtls ]
+
+  mysql-pkcs11-frontend:
+    build: ./tlsproxy
+    container_name: mysql_pkcs11_front
+    environment:
+      SERVICE_NAME: "mysql_pkcs11"
+      ACCEPT_PORT: "${MYSQL_PKCS11_PORT}"
+      CONNECT_HOST: "mysql_pkcs11_db"
+      CONNECT_PORT: "3306"
+      REQUIRE_CLIENT_CERT: "mtls"
+      ENABLE_PKCS11: "1"
+      PKCS11_URI: "pkcs11:token=${SOFTHSM_TOKEN_LABEL};object=${PKCS11_KEY_LABEL_PREFIX}-mysql;type=private"
+    ports: [ "${MYSQL_PKCS11_PORT}:${MYSQL_PKCS11_PORT}" ]
+    volumes: [ "${CERTS_DIR}:/certs:ro", "softhsm:/var/lib/softhsm" ]
+    networks: [ dbnet ]
+    depends_on: [ mysql-pkcs11, softhsm ]
+
+  seeder-mysql:
+    build: ./seeder
+    container_name: seeder_mysql
+    environment:
+      DB_COUNT: "${DB_COUNT}"
+      RECORDS_PER_DB: "${RECORDS_PER_DB}"
+      MIN_TABLES: "${MIN_TABLES}"
+      MAX_TABLES: "${MAX_TABLES}"
+      MYSQL_MDP_HOST: "mysql-mdp"
+      MYSQL_MDP_PORT: "3306"
+      MYSQL_TLS_HOST: "mysql-tls-frontend"
+      MYSQL_TLS_PORT: "${MYSQL_TLS_PORT}"
+      MYSQL_MTLS_HOST: "mysql-mtls-frontend"
+      MYSQL_MTLS_PORT: "${MYSQL_MTLS_PORT}"
+      MYSQL_PKCS11_HOST: "mysql-pkcs11-frontend"
+      MYSQL_PKCS11_PORT: "${MYSQL_PKCS11_PORT}"
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}"
+      TLS_CA_FILE: "/certs/ca/ca.crt"
+      TLS_CLIENT_CERT: "/certs/client/client.crt"
+      TLS_CLIENT_KEY: "/certs/client/client.key"
+    volumes: [ "${CERTS_DIR}:/certs:ro" ]
+    networks: [ dbnet ]
+    depends_on:
+      - mysql-mdp
+      - mysql-tls-frontend
+      - mysql-mtls-frontend
+      - mysql-pkcs11-frontend

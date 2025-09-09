@@ -1,0 +1,26 @@
+# tlsproxy/stunnel.conf.template
+
+debug = 7
+output = /var/log/stunnel.log
+socket = l:TCP_NODELAY=1
+socket = r:TCP_NODELAY=1
+
+; === Engine PKCS#11 (injecté si ENABLE_PKCS11=1) ===
+@ENGINE_GLOBAL@
+
+[@SERVICE_NAME@]
+accept  = 0.0.0.0:@ACCEPT_PORT@
+connect = @CONNECT_HOST@:@CONNECT_PORT@
+
+; --- mTLS côté serveur ---
+verify = 2
+CAfile = /certs/ca/ca.crt
+
+; --- Engine à activer au niveau service uniquement si cert+key dans le HSM ---
+@ENGINE_SERVICE@
+
+; --- Lignes cert/key injectées par l’entrypoint ---
+@CERT_LINE@
+@KEY_LINE@
+
+TIMEOUTclose = 0
