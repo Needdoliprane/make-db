@@ -1,7 +1,10 @@
+import json
 import os
 import random
 import string
+import sys
 import time
+import time as _time
 
 import psycopg2
 import pymysql
@@ -28,9 +31,61 @@ TLS_CLIENT_KEY = os.getenv("TLS_CLIENT_KEY", "/certs/client/client.key")
 PKCS11_FRONTEND_HOST = os.getenv("PG_PKCS11_HOST", "pg-pkcs11-frontend")
 PKCS11_CLIENT_HOST = os.getenv("PG_PKCS11_CLIENT_HOST", "pg-pkcs11-client")
 
+SENSITIVE_MARKERS = ("password", "pwd", "secret", "token", "key", "pin")
+
+
+def dump_env(prefix_filters=None):
+    """
+    Affiche toutes (ou une partie) des variables d'environnement,
+    en masquant les valeurs sensibles.
+    """
+    print("\n=== ENV DUMP ===")
+    keys = sorted(os.environ.keys())
+    for k in keys:
+        if prefix_filters and not any(k.startswith(p) for p in prefix_filters):
+            continue
+        v = os.getenv(k, "")
+        lower = k.lower()
+        if any(m in lower for m in SENSITIVE_MARKERS):
+            if v:
+                v_masked = f"{v[:3]}…{v[-2:]}" if len(v) > 5 else "*****"
+            else:
+                v_masked = ""
+            print(f"{k}={v_masked}")
+        else:
+            print(f"{k}={v}")
+    print("=== /ENV DUMP ===\n")
+    sys.stdout.flush()
+
 
 def rnd_word(n=8):
     return "".join(random.choices(string.ascii_lowercase, k=n))
+
+
+def rnd_json_obj(max_depth=2):
+    def rnd_val(depth=0):
+        # types autorisés : int, float, str, bool, None, list, dict
+        leaf = ["int", "float", "str", "bool", "null"]
+        rec = ["list", "dict"]
+        t = random.choice((leaf + rec) if depth < max_depth else leaf)
+        if t == "int":
+            return random.randint(0, 1_000_000)
+        if t == "float":
+            return round(random.uniform(0, 10_000), 3)
+        if t == "str":
+            return fake.text(40)
+        if t == "bool":
+            return random.choice([True, False])
+        if t == "null":
+            return None
+        if t == "list":
+            return [rnd_val(depth + 1) for _ in range(random.randint(1, 5))]
+        if t == "dict":
+            return {rnd_word(): rnd_val(depth + 1) for _ in range(random.randint(1, 5))}
+
+    # on force un objet au top-level (MySQL aime bien)
+    obj = {rnd_word(): rnd_val() for _ in range(random.randint(2, 6))}
+    return json.dumps(obj, ensure_ascii=False)
 
 
 def gen_schema(engine: str):
@@ -226,38 +281,99 @@ def seed_pg_variant(name, host, port):
 
 
 # ---------- MySQL / MariaDB ----------
+# def mysql_conn(host, port, dbname=None, root_pw_env="MYSQL_ROOT_PASSWORD"):
+#     ssl_params = None
+#     if (
+#         host.endswith("-tls") or host.endswith("-mtls") or host.endswith("-pkcs11")
+#     ):  # tls/mtls/pkcs11
+#         ssl_params = {"ca": TLS_CA_FILE}
+#         if host.endswith(("-mtls", "-pkcs11")):
+#             ssl_params.update({"cert": TLS_CLIENT_CERT, "key": TLS_CLIENT_KEY})
+#     print(
+#         f"[MySQL] connecting to {host}:{port} db={dbname or '(none)'} ...", flush=True
+#     )
+#     conn = pymysql.connect(
+#         host=host,
+#         port=int(port),
+#         user="root",
+#         password=os.getenv(root_pw_env, "rootpwd"),
+#         database=dbname,
+#         ssl=ssl_params,
+#         connect_timeout=5,
+#         read_timeout=120,
+#         write_timeout=120,
+#     )
+#     print(f"[MySQL] connected to {host}:{port} db={dbname or '(none)'}", flush=True)
+#     return conn
+
+
 def mysql_conn(host, port, dbname=None, root_pw_env="MYSQL_ROOT_PASSWORD"):
+    hostname = host.lower()
+
+    is_client_tunnel = (
+        hostname.endswith("-client")
+        or "pkcs11-client" in hostname
+        or hostname.endswith("_client")
+    )
+
+    if is_client_tunnel:
+        needs_tls = False
+        needs_mtls = False
+    else:
+        needs_tls = hostname.endswith(("-tls", "-mtls", "-pkcs11")) or (
+            "pkcs11" in hostname
+        )
+        needs_mtls = hostname.endswith(("-mtls", "-pkcs11")) or ("pkcs11" in hostname)
+
     ssl_params = None
-    if host.endswith("-frontend"):  # tls/mtls/pkcs11
+    if needs_tls:
         ssl_params = {"ca": TLS_CA_FILE}
-        if (
-            host.startswith(
-                ("mysql-mtls", "mysql-pkcs11", "mariadb-mtls", "mariadb-pkcs11")
-            )
-            or "mtls" in host
-            or "pkcs11" in host
-        ):
+        if needs_mtls:
             ssl_params.update({"cert": TLS_CLIENT_CERT, "key": TLS_CLIENT_KEY})
-    return pymysql.connect(
+
+    print(
+        f"[MySQL] connecting to {host}:{port} db={dbname or '(none)'} "
+        f"tls={bool(ssl_params)} mtls={needs_mtls}",
+        flush=True,
+    )
+
+    conn = pymysql.connect(
         host=host,
         port=int(port),
         user="root",
-        password=os.getenv(root_pw_env, "rootpwd"),
+        password=os.getenv(root_pw_env)
+        or os.getenv("MYSQL_ROOT_PASSWORD")
+        or "rootpwd",
         database=dbname,
         ssl=ssl_params,
+        connect_timeout=5,
+        read_timeout=60,
+        write_timeout=60,
     )
+    print(f"[MySQL] connected to {host}:{port} db={dbname or '(none)'}", flush=True)
+    return conn
 
 
 def seed_mysql_like(label, host, port, root_pw_env, engine_key):
+
+    start = _time.perf_counter()
+    print(f"[{label}] phase=CreateDBs start", flush=True)
+
     with mysql_conn(host, port, None, root_pw_env) as conn:
         cur = conn.cursor()
         for i in range(1, DB_COUNT + 1):
             dbn = f"{label}_{i}"
             cur.execute(f"CREATE DATABASE IF NOT EXISTS {dbn};")
         conn.commit()
+    print(
+        f"[{label}] phase=CreateDBs done in {(_time.perf_counter()-start):.2f}s",
+        flush=True,
+    )
 
     for i in range(1, DB_COUNT + 1):
         dbn = f"{label}_{i}"
+        t0 = _time.perf_counter()
+        print(f"[{label}] phase=SeedDB db={dbn} start", flush=True)
         with mysql_conn(host, port, dbn, root_pw_env) as conn:
             cur = conn.cursor()
             schema = gen_schema(engine_key)
@@ -281,7 +397,7 @@ def seed_mysql_like(label, host, port, root_pw_env, engine_key):
                     f"CREATE TABLE IF NOT EXISTS `{t['name']}` ({', '.join(cols_sql)});"
                 )
             conn.commit()
-
+            ins = 0
             for t in schema:
                 cols = [c for c, _ in t["cols"] if c != "id"]
                 ph = ", ".join(["%s"] * len(cols))
@@ -300,7 +416,7 @@ def seed_mysql_like(label, host, port, root_pw_env, engine_key):
                         elif "TIMESTAMP" in u or "DATETIME" in u:
                             row.append(str(fake.date_time()))
                         elif "JSON" in u:
-                            row.append(str(fake.pydict(5, True, True)))
+                            row.append(rnd_json_obj())
                         elif "BLOB" in u:
                             row.append(os.urandom(32))
                         else:
@@ -309,7 +425,14 @@ def seed_mysql_like(label, host, port, root_pw_env, engine_key):
                         f"INSERT INTO `{t['name']}` ({', '.join(cols)}) VALUES ({ph})",
                         row,
                     )
-            conn.commit()
+                    ins += 1
+                    if ins % 250 == 0:
+                        print(f"[{label}] db={dbn} inserts={ins}", flush=True)
+                conn.commit()
+            print(
+                f"[{label}] phase=SeedDB db={dbn} done in {(_time.perf_counter()-t0):.2f}s (rows={ins})",
+                flush=True,
+            )
         print(f"[{label}] Seeded {dbn}")
 
 
@@ -353,8 +476,30 @@ def seed_mongo_variant(name, host, port, mtls=False):
 
 
 def main():
+    print("Seeder started, waiting for DBs...", flush=True)
     time.sleep(6)
 
+    # Montre au minimum les knobs + cibles MySQL (ajoute PG/Maria/Mongo si utile)
+    dump_env(
+        prefix_filters=[
+            "DB_COUNT",
+            "RECORDS_PER_DB",
+            "MIN_TABLES",
+            "MAX_TABLES",
+            "MYSQL_MDP_HOST",
+            "MYSQL_MDP_PORT",
+            "MYSQL_TLS_HOST",
+            "MYSQL_TLS_PORT",
+            "MYSQL_MTLS_HOST",
+            "MYSQL_MTLS_PORT",
+            "MYSQL_PKCS11_HOST",
+            "MYSQL_PKCS11_PORT",
+            "MYSQL_ROOT_PASSWORD",
+            "TLS_CA_FILE",
+            "TLS_CLIENT_CERT",
+            "TLS_CLIENT_KEY",
+        ]
+    )
     # PostgreSQL
     if os.getenv("PG_MDP_HOST"):
         seed_pg_variant("mdp", os.getenv("PG_MDP_HOST"), os.getenv("PG_MDP_PORT"))

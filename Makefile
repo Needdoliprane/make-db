@@ -21,11 +21,17 @@ PG_TLS_PORT ?= 54322
 PG_MTLS_PORT ?= 54323
 PG_PKCS11_PORT ?= 35432
 
+MYSQL_MDP_PORT ?= 3306
+MYSQL_TLS_PORT ?= 13306
+MYSQL_MTLS_PORT ?= 23306
+MYSQL_PKCS11_PORT ?= 33306
+
 # Chemin absolu pour éviter les surprises côté compose/containers
 CERTS_DIR := $(abspath $(CERTS_DIR))
 
 # Export explicite des variables clés (en plus de celles venues du .env)
-export CERTS_DIR POSTGRES_USER POSTGRES_PASSWORD SOFTHSM_TOKEN_LABEL SOFTHSM_USER_PIN PG_MDP_PORT PG_TLS_PORT PG_MTLS_PORT PG_PKCS11_PORT
+export CERTS_DIR POSTGRES_USER POSTGRES_PASSWORD SOFTHSM_TOKEN_LABEL SOFTHSM_USER_PIN PG_MDP_PORT PG_TLS_PORT PG_MTLS_PORT PG_PKCS11_PORT \
+		MYSQL_MDP_PORT MYSQL_TLS_PORT MYSQL_MTLS_PORT MYSQL_PKCS11_PORT MYSQL_ROOT_PASSWORD
 
 # ---- Compose sets ----
 COMPOSE_BASE = -f docker-compose.base.yml
@@ -100,7 +106,7 @@ up-pg:
 	docker compose $(COMPOSE_BASE) $(COMPOSE_PG) up -d
 
 down-pg:
-	docker compose $(COMPOSE_BASE) $(COMPOSE_PG) down
+	docker compose $(COMPOSE_BASE) $(COMPOSE_PG) down -v
 
 restart-pg:
 	docker compose $(COMPOSE_BASE) $(COMPOSE_PG) restart
@@ -112,7 +118,7 @@ up-mysql: certs
 	docker compose $(COMPOSE_BASE) $(COMPOSE_MYSQL) up -d
 
 down-mysql:
-	docker compose $(COMPOSE_BASE) $(COMPOSE_MYSQL) down
+	docker compose $(COMPOSE_BASE) $(COMPOSE_MYSQL) down -v 
 
 restart-mysql:
 	docker compose $(COMPOSE_BASE) $(COMPOSE_MYSQL) restart
@@ -124,7 +130,7 @@ up-maria: certs
 	docker compose $(COMPOSE_BASE) $(COMPOSE_MARIA) up -d
 
 down-maria:
-	docker compose $(COMPOSE_BASE) $(COMPOSE_MARIA) down
+	docker compose $(COMPOSE_BASE) $(COMPOSE_MARIA) down -v 
 
 restart-maria:
 	docker compose $(COMPOSE_BASE) $(COMPOSE_MARIA) restart
@@ -136,7 +142,7 @@ up-mongo: certs
 	docker compose $(COMPOSE_BASE) $(COMPOSE_MONGO) up -d
 
 down-mongo:
-	docker compose $(COMPOSE_BASE) $(COMPOSE_MONGO) down
+	docker compose $(COMPOSE_BASE) $(COMPOSE_MONGO) down -v
 
 restart-mongo:
 	docker compose $(COMPOSE_BASE) $(COMPOSE_MONGO) restart

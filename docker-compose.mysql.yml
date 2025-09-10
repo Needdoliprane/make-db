@@ -5,109 +5,146 @@ networks:
 volumes:
   softhsm:
     external: true
+  mysql_tls_data:
+  mysql_mtls_data:
+
 
 services:
   mysql-mdp:
-    image: mysql:8
-    container_name: mysql_mdp
-    environment: { MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}" }
-    command: [ "--default-authentication-plugin=mysql_native_password" ]
-    ports: [ "${MYSQL_MDP_PORT}:3306" ]
+    image: mysql:8.4 # conseillé (LTS). Si tu tiens à 9.x, garde ton tag.
+    environment:
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}"
+      MYSQL_ROOT_HOST: "%"
     networks: [ dbnet ]
+    healthcheck:
+      test: [ "CMD-SHELL", "mysqladmin ping -uroot -p$${MYSQL_ROOT_PASSWORD} -h 127.0.0.1 || exit 1" ]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+    # pas de container_name -> on résout via le nom de service "mysql-mdp"
 
+    # --- MySQL avec TLS (TLS obligatoire, pas de cert client requis) ---
   mysql-tls:
-    image: mysql:8
-    container_name: mysql_tls_db
-    environment: { MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}" }
-    command: [ "--default-authentication-plugin=mysql_native_password" ]
-    networks: [ dbnet ]
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}"
+      MYSQL_ROOT_HOST: "%"
+      MYSQL_TLS_PORT: "${MYSQL_TLS_PORT}"
+    networks:
+      dbnet:
+        aliases: [ mysql-tls, mysql_tls ]
+    volumes:
+      - mysql_tls_data:/var/lib/mysql
+      - ${CERTS_DIR}:/ssl-src:ro
+      - ./mysql/tls-init/start-mysql-tls.sh:/usr/local/bin/start-mysql.sh:ro
+    entrypoint: [ "/usr/local/bin/start-mysql.sh" ]
+    healthcheck:
+      test: [ "CMD-SHELL", "mysqladmin --protocol=tcp -uroot -p$${MYSQL_ROOT_PASSWORD} -h 127.0.0.1 -P $${MYSQL_TLS_PORT} --ssl-mode=VERIFY_CA --ssl-ca=/etc/mysql/ssl/ca.crt ping || exit 1" ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
 
   mysql-mtls:
-    image: mysql:8
-    container_name: mysql_mtls_db
-    environment: { MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}" }
-    command: [ "--default-authentication-plugin=mysql_native_password" ]
-    networks: [ dbnet ]
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}"
+      MYSQL_ROOT_HOST: "%"
+      MYSQL_MTLS_PORT: "${MYSQL_MTLS_PORT}"
+    networks:
+      dbnet:
+        aliases: [ mysql-mtls, mysql_mtls ]
+    volumes:
+      - mysql_mtls_data:/var/lib/mysql
+      - ${CERTS_DIR}:/ssl-src:ro
+      - ./mysql/mtls-init/start-mysql-mtls.sh:/usr/local/bin/start-mysql.sh:ro
+    entrypoint: [ "/usr/local/bin/start-mysql.sh" ]
+    healthcheck:
+      test: [ "CMD-SHELL", "mysqladmin --protocol=tcp -uroot -p$${MYSQL_ROOT_PASSWORD} -h 127.0.0.1 -P $${MYSQL_MTLS_PORT} --ssl-mode=VERIFY_CA --ssl-ca=/etc/mysql/ssl/ca.crt --ssl-cert=/ssl-src/client/client.crt --ssl-key=/ssl-src/client/client.key ping || exit 1" ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
 
   mysql-pkcs11:
-    image: mysql:8
-    container_name: mysql_pkcs11_db
-    environment: { MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}" }
-    command: [ "--default-authentication-plugin=mysql_native_password" ]
-    networks: [ dbnet ]
-
-  mysql-tls-frontend:
-    build: ./tlsproxy
-    container_name: mysql_tls_front
+    image: mysql:8.4
     environment:
-      SERVICE_NAME: "mysql_tls"
-      ACCEPT_PORT: "${MYSQL_TLS_PORT}"
-      CONNECT_HOST: "mysql_tls_db"
-      CONNECT_PORT: "3306"
-      REQUIRE_CLIENT_CERT: "tls"
-      ENABLE_PKCS11: "0"
-      PKCS11_URI: ""
-    ports: [ "${MYSQL_TLS_PORT}:${MYSQL_TLS_PORT}" ]
-    volumes: [ "${CERTS_DIR}:/certs:ro" ]
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}"
+      MYSQL_ROOT_HOST: "%"
     networks: [ dbnet ]
-    depends_on: [ mysql-tls ]
-
-  mysql-mtls-frontend:
-    build: ./tlsproxy
-    container_name: mysql_mtls_front
-    environment:
-      SERVICE_NAME: "mysql_mtls"
-      ACCEPT_PORT: "${MYSQL_MTLS_PORT}"
-      CONNECT_HOST: "mysql_mtls_db"
-      CONNECT_PORT: "3306"
-      REQUIRE_CLIENT_CERT: "mtls"
-      ENABLE_PKCS11: "0"
-      PKCS11_URI: ""
-    ports: [ "${MYSQL_MTLS_PORT}:${MYSQL_MTLS_PORT}" ]
-    volumes: [ "${CERTS_DIR}:/certs:ro" ]
-    networks: [ dbnet ]
-    depends_on: [ mysql-mtls ]
+    healthcheck:
+      test: [ "CMD-SHELL", "mysqladmin ping -uroot -p$${MYSQL_ROOT_PASSWORD} -h 127.0.0.1 || exit 1" ]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
 
   mysql-pkcs11-frontend:
     build: ./tlsproxy
-    container_name: mysql_pkcs11_front
     environment:
       SERVICE_NAME: "mysql_pkcs11"
       ACCEPT_PORT: "${MYSQL_PKCS11_PORT}"
-      CONNECT_HOST: "mysql_pkcs11_db"
+      CONNECT_HOST: "mysql-pkcs11"
       CONNECT_PORT: "3306"
       REQUIRE_CLIENT_CERT: "mtls"
       ENABLE_PKCS11: "1"
+      PKCS11_KEY_LABEL: "svc-mysql"
+      PKCS11_CERT_LABEL: "svc-mysql-cert"
       PKCS11_URI: "pkcs11:token=${SOFTHSM_TOKEN_LABEL};object=${PKCS11_KEY_LABEL_PREFIX}-mysql;type=private"
     ports: [ "${MYSQL_PKCS11_PORT}:${MYSQL_PKCS11_PORT}" ]
     volumes: [ "${CERTS_DIR}:/certs:ro", "softhsm:/var/lib/softhsm" ]
     networks: [ dbnet ]
-    depends_on: [ mysql-pkcs11, softhsm ]
+    depends_on:
+      mysql-pkcs11:
+        condition: service_healthy
+
+  mysql-pkcs11-client:
+    image: alpine:3.20
+    command: sh -c "apk add --no-cache stunnel && stunnel /etc/stunnel/stunnel.conf"
+    volumes:
+      - ${CERTS_DIR}:/certs:ro
+      - ./tlsproxy/mysql-client.conf:/etc/stunnel/stunnel.conf:ro
+    networks: [ dbnet ]
+    depends_on:
+      mysql-pkcs11-frontend:
+        condition: service_started
 
   seeder-mysql:
     build: ./seeder
-    container_name: seeder_mysql
     environment:
       DB_COUNT: "${DB_COUNT}"
       RECORDS_PER_DB: "${RECORDS_PER_DB}"
       MIN_TABLES: "${MIN_TABLES}"
       MAX_TABLES: "${MAX_TABLES}"
+
       MYSQL_MDP_HOST: "mysql-mdp"
       MYSQL_MDP_PORT: "3306"
-      MYSQL_TLS_HOST: "mysql-tls-frontend"
+
+      MYSQL_TLS_HOST: "mysql-tls"
       MYSQL_TLS_PORT: "${MYSQL_TLS_PORT}"
-      MYSQL_MTLS_HOST: "mysql-mtls-frontend"
+
+      MYSQL_MTLS_HOST: "mysql-mtls"
       MYSQL_MTLS_PORT: "${MYSQL_MTLS_PORT}"
-      MYSQL_PKCS11_HOST: "mysql-pkcs11-frontend"
-      MYSQL_PKCS11_PORT: "${MYSQL_PKCS11_PORT}"
+
+      MYSQL_PKCS11_HOST: "mysql-pkcs11-client"
+      MYSQL_PKCS11_PORT: "43306"
+
       MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}"
+
       TLS_CA_FILE: "/certs/ca/ca.crt"
       TLS_CLIENT_CERT: "/certs/client/client.crt"
       TLS_CLIENT_KEY: "/certs/client/client.key"
-    volumes: [ "${CERTS_DIR}:/certs:ro" ]
+    volumes:
+      - "./certs/:/certs:ro"
     networks: [ dbnet ]
     depends_on:
-      - mysql-mdp
-      - mysql-tls-frontend
-      - mysql-mtls-frontend
-      - mysql-pkcs11-frontend
+      mysql-mdp:
+        condition: service_healthy
+      mysql-tls:
+        condition: service_healthy
+      mysql-mtls:
+        condition: service_healthy
+      mysql-pkcs11-frontend:
+        condition: service_started
