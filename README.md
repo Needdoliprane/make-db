@@ -261,6 +261,6 @@ make really-clean    # remove ./certs and the softhsm volume
 
 ## License
 
-MIT (or your preferred license).
+I don't give a f**k you can do what ever you want.
 
 > **⚠️ This project is for development/demo only — do not expose as-is to production.**
