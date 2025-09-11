@@ -279,34 +279,6 @@ def seed_pg_variant(name, host, port):
             conn.commit()
         print(f"[PG:{name}] Seeded {dbn}")
 
-
-# ---------- MySQL / MariaDB ----------
-# def mysql_conn(host, port, dbname=None, root_pw_env="MYSQL_ROOT_PASSWORD"):
-#     ssl_params = None
-#     if (
-#         host.endswith("-tls") or host.endswith("-mtls") or host.endswith("-pkcs11")
-#     ):  # tls/mtls/pkcs11
-#         ssl_params = {"ca": TLS_CA_FILE}
-#         if host.endswith(("-mtls", "-pkcs11")):
-#             ssl_params.update({"cert": TLS_CLIENT_CERT, "key": TLS_CLIENT_KEY})
-#     print(
-#         f"[MySQL] connecting to {host}:{port} db={dbname or '(none)'} ...", flush=True
-#     )
-#     conn = pymysql.connect(
-#         host=host,
-#         port=int(port),
-#         user="root",
-#         password=os.getenv(root_pw_env, "rootpwd"),
-#         database=dbname,
-#         ssl=ssl_params,
-#         connect_timeout=5,
-#         read_timeout=120,
-#         write_timeout=120,
-#     )
-#     print(f"[MySQL] connected to {host}:{port} db={dbname or '(none)'}", flush=True)
-#     return conn
-
-
 def mysql_conn(host, port, dbname=None, root_pw_env="MYSQL_ROOT_PASSWORD"):
     hostname = host.lower()
 
