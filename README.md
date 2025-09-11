@@ -261,6 +261,5 @@ make really-clean    # remove ./certs and the softhsm volume
 
 ## License
 
-I don't give a f**k you can do what ever you want.
-
+Steer the ship however you want—I’m off the hook for any icebergs. / You’re free to proceed as you see fit; please note I can’t accept responsibility for the outcome.
 > **⚠️ This project is for development/demo only — do not expose as-is to production.**
