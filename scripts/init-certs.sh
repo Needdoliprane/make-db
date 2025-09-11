@@ -244,7 +244,7 @@ pkcs11-tool --module \"\$MOD\" --token-label '${SOFTHSM_TOKEN_LABEL}' \
 }
 
 gen_server_fs () {
-  # $1 = dir (ex: pg_tls), $2 = SAN CSV (ex: "localhost,pg-tls")
+  # $1 = dir (ex: pg_tls), $2 = SAN CSV (ex: "localhost,127,0,0,1,pg-tls")
   local svc="$1"
   local san_csv="$2"
   local OUT="$DIR/server/${svc}"
@@ -292,6 +292,8 @@ EOF
     -out "$OUT/server.crt"
 
   rm -f "$ALT" "$REQ" "$OUT/server.csr"
+
+  cat "$OUT/server.key" "$OUT/server.crt" > "$OUT/server.pem"
   echo "✅ FS cert prêt pour $svc"
 }
 
@@ -310,26 +312,29 @@ gen_client_cert () {
     -days 825 -sha256 \
     -out "$COUT/client.crt"
   rm -f "$REQ"
+
+  cat "$COUT/client.key" "$COUT/client.crt" > "$COUT/client.pem"
+
   echo "✅ Cert client mTLS généré"
 }
 
 # serveurs FS (TLS natif et mTLS natif)
-gen_server_fs pg_tls    "localhost,pg-tls"
-gen_server_fs pg_mtls   "localhost,pg-mtls"
-gen_server_fs mysql_tls   "localhost,mysql-tls"
-gen_server_fs mysql_mtls  "localhost,mysql-mtls"
-gen_server_fs mariadb_tls  "localhost,mariadb-tls"
-gen_server_fs mariadb_mtls "localhost,mariadb-mtls"
-gen_server_fs mongo_tls    "localhost,mongo-tls"
-gen_server_fs mongo_mtls   "localhost,mongo-mtls"
+gen_server_fs pg_tls    "localhost,127,0,0,1,pg-tls"
+gen_server_fs pg_mtls   "localhost,127,0,0,1,pg-mtls"
+gen_server_fs mysql_tls   "localhost,127,0,0,1,mysql-tls"
+gen_server_fs mysql_mtls  "localhost,127,0,0,1,mysql-mtls"
+gen_server_fs mariadb_tls  "localhost,127,0,0,1,mariadb-tls"
+gen_server_fs mariadb_mtls "localhost,127,0,0,1,mariadb-mtls"
+gen_server_fs mongo_tls    "localhost,127,0,0,1,mongo-tls"
+gen_server_fs mongo_mtls   "localhost,127,0,0,1,mongo-mtls"
 
 # client mTLS (utilisé par seeder et pour pg-mtls)
 gen_client_cert
 
 # Génération pour chaque service
-gen_one pg_pkcs11      01 svc-pg      "localhost,pg-pkcs11-frontend"
-gen_one mysql_pkcs11   02 svc-mysql   "localhost,mysql-pkcs11-frontend"
-gen_one mariadb_pkcs11 03 svc-mariadb "localhost,mariadb-pkcs11-frontend"
-gen_one mongo_pkcs11   04 svc-mongo   "localhost,mongo-pkcs11-frontend"
+gen_one pg_pkcs11      01 svc-pg      "localhost,127,0,0,1,pg-pkcs11-frontend"
+gen_one mysql_pkcs11   02 svc-mysql   "localhost,127,0,0,1,mysql-pkcs11-frontend"
+gen_one mariadb_pkcs11 03 svc-mariadb "localhost,127,0,0,1,mariadb-pkcs11-frontend"
+gen_one mongo_pkcs11   04 svc-mongo   "localhost,127,0,0,1,mongo-pkcs11-frontend"
 
 echo "✅ Certs générés/importés (token=${SOFTHSM_TOKEN_LABEL})"

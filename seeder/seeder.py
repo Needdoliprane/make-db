@@ -440,7 +440,7 @@ def seed_mysql_like(label, host, port, root_pw_env, engine_key):
 def mongo_client(host, port, mtls=False):
     uri = f"mongodb://{os.getenv('MONGO_INITDB_ROOT_USERNAME','admin')}:{os.getenv('MONGO_INITDB_ROOT_PASSWORD','adminpwd')}@{host}:{port}/?authSource=admin"
     kwargs = {}
-    if host.endswith("-frontend"):
+    if host.endswith("tls") or host.endswith("mtls"):
         kwargs["tls"] = True
         kwargs["tlsCAFile"] = TLS_CA_FILE
         if mtls:

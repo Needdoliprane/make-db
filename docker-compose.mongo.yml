@@ -7,91 +7,125 @@ volumes:
     external: true
 
 services:
+  # --- Plain / mot de passe ---
   mongo-mdp:
-    image: mongo:7
-    container_name: mongo_mdp
+    image: mongo:8
     environment:
       MONGO_INITDB_ROOT_USERNAME: "${MONGO_INITDB_ROOT_USERNAME}"
       MONGO_INITDB_ROOT_PASSWORD: "${MONGO_INITDB_ROOT_PASSWORD}"
-    command: [ "--auth" ]
+    command: [ "--auth", "--bind_ip_all", "--port=27017" ]
     ports: [ "${MONGO_MDP_PORT}:27017" ]
     networks: [ dbnet ]
-
+    healthcheck:
+      test: [ "CMD-SHELL", "mongosh --quiet --host 127.0.0.1 --username $${MONGO_INITDB_ROOT_USERNAME} --password $${MONGO_INITDB_ROOT_PASSWORD} --authenticationDatabase admin --eval 'db.runCommand({ping:1}).ok' | grep -q 1" ]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+  # --- TLS natif (serveur présente un cert, client/mTLS non requis) ---
   mongo-tls:
-    image: mongo:7
-    container_name: mongo_tls_db
+    image: mongo:8.0
     environment:
       MONGO_INITDB_ROOT_USERNAME: "${MONGO_INITDB_ROOT_USERNAME}"
       MONGO_INITDB_ROOT_PASSWORD: "${MONGO_INITDB_ROOT_PASSWORD}"
-    command: [ "--auth" ]
-    networks: [ dbnet ]
+    command:
+      - mongod
+      - --auth
+      - --bind_ip_all
+      - --port=${MONGO_TLS_PORT}
+      - --tlsMode=requireTLS
+      - --tlsCAFile=/certs/ca/ca.crt
+      - --tlsCertificateKeyFile=/certs/server/mongo_tls/server.pem
+      - --tlsAllowConnectionsWithoutCertificates
+    volumes:
+      - "${CERTS_DIR}:/certs:ro"
+    ports: [ "${MONGO_TLS_PORT}:${MONGO_TLS_PORT}" ]
+    networks:
+      dbnet:
+        aliases: [ mongo-tls ] # ton seeder l’utilise
 
   mongo-mtls:
-    image: mongo:7
+    image: mongo:8.0
     container_name: mongo_mtls_db
     environment:
       MONGO_INITDB_ROOT_USERNAME: "${MONGO_INITDB_ROOT_USERNAME}"
       MONGO_INITDB_ROOT_PASSWORD: "${MONGO_INITDB_ROOT_PASSWORD}"
-    command: [ "--auth" ]
-    networks: [ dbnet ]
+    command:
+      - mongod
+      - --auth
+      - --bind_ip_all
+      - --port=${MONGO_MTLS_PORT}
+      - --tlsMode=requireTLS
+      - --tlsCAFile=/certs/ca/ca.crt
+      - --tlsCertificateKeyFile=/certs/server/mongo_mtls/server.pem
+    volumes:
+      - "${CERTS_DIR}:/certs:ro"
+    networks:
+      dbnet:
+        aliases: [ mongo-mtls ]
+    ports: [ "${MONGO_MTLS_PORT}:${MONGO_MTLS_PORT}" ] # -> host 27027 (env)
+    healthcheck:
+      # mTLS => mongosh doit présenter un cert client
+      test: [ "CMD-SHELL", "mongosh --quiet --host 127.0.0.1 --port ${MONGO_MTLS_PORT} --tls --tlsCAFile /certs/ca/ca.crt --tlsCertificateKeyFile /certs/client/client.pem --username $${MONGO_INITDB_ROOT_USERNAME} --password $${MONGO_INITDB_ROOT_PASSWORD} --authenticationDatabase admin --eval 'db.runCommand({ping:1}).ok' | grep -q 1 || exit 1" ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
 
   mongo-pkcs11:
-    image: mongo:7
-    container_name: mongo_pkcs11_db
+    image: mongo:8.0
     environment:
       MONGO_INITDB_ROOT_USERNAME: "${MONGO_INITDB_ROOT_USERNAME}"
       MONGO_INITDB_ROOT_PASSWORD: "${MONGO_INITDB_ROOT_PASSWORD}"
-    command: [ "--auth" ]
+    command:
+      - mongod
+      - --auth
+      - --bind_ip_all
+      - --port=27017
     networks: [ dbnet ]
+    healthcheck:
+      test: [ "CMD-SHELL", "mongosh --quiet --host 127.0.0.1 --port 27017 --username $${MONGO_INITDB_ROOT_USERNAME} --password $${MONGO_INITDB_ROOT_PASSWORD} --authenticationDatabase admin --eval 'db.runCommand({ping:1}).ok' | grep -q 1 || exit 1" ]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
 
-  mongo-tls-frontend:
-    build: ./tlsproxy
-    container_name: mongo_tls_front
-    environment:
-      SERVICE_NAME: "mongo_tls"
-      ACCEPT_PORT: "${MONGO_TLS_PORT}"
-      CONNECT_HOST: "mongo_tls_db"
-      CONNECT_PORT: "27017"
-      REQUIRE_CLIENT_CERT: "tls"
-      ENABLE_PKCS11: "0"
-      PKCS11_URI: ""
-    ports: [ "${MONGO_TLS_PORT}:${MONGO_TLS_PORT}" ]
-    volumes: [ "${CERTS_DIR}:/certs:ro" ]
-    networks: [ dbnet ]
-    depends_on: [ mongo-tls ]
-
-  mongo-mtls-frontend:
-    build: ./tlsproxy
-    container_name: mongo_mtls_front
-    environment:
-      SERVICE_NAME: "mongo_mtls"
-      ACCEPT_PORT: "${MONGO_MTLS_PORT}"
-      CONNECT_HOST: "mongo_mtls_db"
-      CONNECT_PORT: "27017"
-      REQUIRE_CLIENT_CERT: "mtls"
-      ENABLE_PKCS11: "0"
-      PKCS11_URI: ""
-    ports: [ "${MONGO_MTLS_PORT}:${MONGO_MTLS_PORT}" ]
-    volumes: [ "${CERTS_DIR}:/certs:ro" ]
-    networks: [ dbnet ]
-    depends_on: [ mongo-mtls ]
-
+  # Proxy TLS frontal (mTLS côté client) avec clé serveur depuis HSM (PKCS#11)
   mongo-pkcs11-frontend:
     build: ./tlsproxy
-    container_name: mongo_pkcs11_front
     environment:
       SERVICE_NAME: "mongo_pkcs11"
-      ACCEPT_PORT: "${MONGO_PKCS11_PORT}"
-      CONNECT_HOST: "mongo_pkcs11_db"
+      ACCEPT_PORT: "${MONGO_PKCS11_PORT}" # ex: 37017
+      CONNECT_HOST: "mongo-pkcs11" # backend en clair
       CONNECT_PORT: "27017"
-      REQUIRE_CLIENT_CERT: "mtls"
-      ENABLE_PKCS11: "1"
+      REQUIRE_CLIENT_CERT: "mtls" # exige un cert client
+      ENABLE_PKCS11: "1" # cert/clé serveur via HSM
+      PKCS11_KEY_LABEL: "svc-mongo"
+      PKCS11_CERT_LABEL: "svc-mongo-cert"
       PKCS11_URI: "pkcs11:token=${SOFTHSM_TOKEN_LABEL};object=${PKCS11_KEY_LABEL_PREFIX}-mongo;type=private"
-    ports: [ "${MONGO_PKCS11_PORT}:${MONGO_PKCS11_PORT}" ]
-    volumes: [ "${CERTS_DIR}:/certs:ro", "softhsm:/var/lib/softhsm" ]
+    volumes:
+      - "${CERTS_DIR}:/certs:ro" # CA + (éventuels) certs client de test
+      - "softhsm:/var/lib/softhsm" # SoftHSMv2 pour la clé serveur
     networks: [ dbnet ]
-    depends_on: [ mongo-pkcs11, softhsm ]
+    depends_on:
+      mongo-pkcs11:
+        condition: service_healthy
 
+  # Client stunnel (fait mTLS vers le proxy et expose un port local clair)
+  mongo-pkcs11-client:
+    image: alpine:3.20
+    command: sh -c "apk add --no-cache stunnel && stunnel /etc/stunnel/stunnel.conf"
+    volumes:
+      - ${CERTS_DIR}:/certs:ro
+      - ./tlsproxy/mongo-client.conf:/etc/stunnel/stunnel.conf:ro
+    networks: [ dbnet ]
+    depends_on:
+      mongo-pkcs11-frontend:
+        condition: service_started
+    ports:
+      - "${MONGO_PKCS11_PORT}:${MONGO_PKCS11_PORT}"
+
+  # --- Seeder (inchangé) ---
   seeder-mongo:
     build: ./seeder
     container_name: seeder_mongo
@@ -102,21 +136,21 @@ services:
       MAX_TABLES: "${MAX_TABLES}"
       MONGO_MDP_HOST: "mongo-mdp"
       MONGO_MDP_PORT: "27017"
-      MONGO_TLS_HOST: "mongo-tls-frontend"
+      MONGO_TLS_HOST: "mongo-tls" # alias -> service natif
       MONGO_TLS_PORT: "${MONGO_TLS_PORT}"
-      MONGO_MTLS_HOST: "mongo-mtls-frontend"
+      MONGO_MTLS_HOST: "mongo-mtls" # alias -> service natif
       MONGO_MTLS_PORT: "${MONGO_MTLS_PORT}"
-      MONGO_PKCS11_HOST: "mongo-pkcs11-frontend"
+      MONGO_PKCS11_HOST: "mongo-pkcs11-client"
       MONGO_PKCS11_PORT: "${MONGO_PKCS11_PORT}"
       MONGO_INITDB_ROOT_USERNAME: "${MONGO_INITDB_ROOT_USERNAME}"
       MONGO_INITDB_ROOT_PASSWORD: "${MONGO_INITDB_ROOT_PASSWORD}"
       TLS_CA_FILE: "/certs/ca/ca.crt"
-      TLS_CLIENT_CERT: "/certs/client/client.crt"
-      TLS_CLIENT_KEY: "/certs/client/client.key"
+      TLS_CLIENT_CERT: "/certs/client/client.pem"
+      TLS_CLIENT_KEY: "/certs/client/client.pem"
     volumes: [ "${CERTS_DIR}:/certs:ro" ]
     networks: [ dbnet ]
     depends_on:
       - mongo-mdp
-      - mongo-tls-frontend
-      - mongo-mtls-frontend
+      - mongo-tls
+      - mongo-mtls
       - mongo-pkcs11-frontend

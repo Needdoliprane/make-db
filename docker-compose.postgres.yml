@@ -75,7 +75,6 @@ services:
       SOFTHSM_USER_PIN: "${SOFTHSM_USER_PIN}"
       SOFTHSM2_CONF: "/etc/softhsm2.conf"
       OPENSSL_CONF: "/etc/ssl/openssl-pkcs11.cnf"
-    ports: [ "${PG_PKCS11_PORT}:${PG_PKCS11_PORT}" ]
     volumes:
       - "./certs/:/certs:ro"
       - "softhsm:/var/lib/softhsm"
@@ -99,10 +98,11 @@ services:
       - ./tlsproxy/stunnel-client.conf:/etc/stunnel/stunnel.conf:ro
     networks: [ dbnet ]
     healthcheck:
-      test: [ "CMD-SHELL", "busybox netstat -tln | grep -q :15432" ]
+      test: [ "CMD-SHELL", "busybox netstat -tln | grep -q :${PG_PKCS11_PORT}" ]
       interval: 3s
       timeout: 2s
       retries: 30
+    ports: [ "${PG_PKCS11_PORT}:${PG_PKCS11_PORT}" ]
 
   # --- Seeder (PostgreSQL only) ---
   seeder-pg:
@@ -128,7 +128,7 @@ services:
 
       # PKCS#11 via proxy (mTLS + clé serveur en HSM)
       PG_PKCS11_HOST: "pg-pkcs11-client"
-      PG_PKCS11_PORT: "15432"
+      PG_PKCS11_PORT: "${PG_PKCS11_PORT}"
 
       POSTGRES_USER: "${POSTGRES_USER}"
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"

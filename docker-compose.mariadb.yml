@@ -31,6 +31,7 @@ services:
     volumes:
       - "${CERTS_DIR}:/certs:ro"
     networks: [ dbnet ]
+    ports: [ "${MARIADB_TLS_PORT}:${MARIADB_TLS_PORT}" ]
 
   # Native mTLS (server verifies client cert). We make root require X509.
   mariadb-mtls:
@@ -49,6 +50,7 @@ services:
       - "${CERTS_DIR}:/certs:ro"
       - ./mariadb/mariadb-mtls:/docker-entrypoint-initdb.d:ro
     networks: [ dbnet ]
+    ports: [ "${MARIADB_MTLS_PORT}:${MARIADB_MTLS_PORT}" ]
 
   mariadb-pkcs11:
     image: mariadb:lts
@@ -78,7 +80,6 @@ services:
       PKCS11_KEY_LABEL: "svc-mariadb"
       PKCS11_CERT_LABEL: "svc-mariadb-cert"
       PKCS11_URI: "pkcs11:token=${SOFTHSM_TOKEN_LABEL};object=${PKCS11_KEY_LABEL_PREFIX}-mariadb;type=private"
-    ports: [ "${MARIADB_PKCS11_PORT}:${MARIADB_PKCS11_PORT}" ]
     volumes:
       - "${CERTS_DIR}:/certs:ro" # CA + éventuel cert client de test
       - "softhsm:/var/lib/softhsm" # HSM logiciel (SoftHSMv2)
@@ -98,6 +99,7 @@ services:
     depends_on:
       mariadb-pkcs11-frontend:
         condition: service_started
+    ports: [ "${MARIADB_PKCS11_PORT}:${MARIADB_PKCS11_PORT}" ]
 
   # Seeder unchanged (note: hostnames now point directly to MariaDB for TLS/mTLS)
   seeder-mariadb:
