@@ -480,26 +480,7 @@ def main():
     time.sleep(6)
 
     # Montre au minimum les knobs + cibles MySQL (ajoute PG/Maria/Mongo si utile)
-    dump_env(
-        prefix_filters=[
-            "DB_COUNT",
-            "RECORDS_PER_DB",
-            "MIN_TABLES",
-            "MAX_TABLES",
-            "MYSQL_MDP_HOST",
-            "MYSQL_MDP_PORT",
-            "MYSQL_TLS_HOST",
-            "MYSQL_TLS_PORT",
-            "MYSQL_MTLS_HOST",
-            "MYSQL_MTLS_PORT",
-            "MYSQL_PKCS11_HOST",
-            "MYSQL_PKCS11_PORT",
-            "MYSQL_ROOT_PASSWORD",
-            "TLS_CA_FILE",
-            "TLS_CLIENT_CERT",
-            "TLS_CLIENT_KEY",
-        ]
-    )
+    dump_env(prefix_filters=["DB_", "POSTGRES_", "MYSQL_", "MARIADB_", "MONGO_"])
     # PostgreSQL
     if os.getenv("PG_MDP_HOST"):
         seed_pg_variant("mdp", os.getenv("PG_MDP_HOST"), os.getenv("PG_MDP_PORT"))

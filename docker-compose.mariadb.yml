@@ -7,62 +7,62 @@ volumes:
     external: true
 
 services:
+  # Plain/password (no TLS)
   mariadb-mdp:
-    image: mariadb:11.4
-    container_name: mariadb_mdp
-    environment: { MARIADB_ROOT_PASSWORD: "${MARIADB_ROOT_PASSWORD}" }
+    image: mariadb:lts
+    container_name: mariadb_mdp_db
+    environment:
+      MARIADB_ROOT_PASSWORD: "${MARIADB_ROOT_PASSWORD}"
     ports: [ "${MARIADB_MDP_PORT}:3306" ]
     networks: [ dbnet ]
 
+  # Native TLS (server cert only, password auth)
   mariadb-tls:
-    image: mariadb:11.4
+    image: mariadb:lts
     container_name: mariadb_tls_db
-    environment: { MARIADB_ROOT_PASSWORD: "${MARIADB_ROOT_PASSWORD}" }
+    environment:
+      MARIADB_ROOT_PASSWORD: "${MARIADB_ROOT_PASSWORD}"
+    command:
+      - --port=${MARIADB_TLS_PORT}
+      - --require_secure_transport=ON
+      - --ssl-cert=/certs/server/mariadb_tls/server.crt
+      - --ssl-key=/certs/server/mariadb_tls/server.key
+      - --ssl-ca=/certs/ca/ca.crt
+    volumes:
+      - "${CERTS_DIR}:/certs:ro"
     networks: [ dbnet ]
 
+  # Native mTLS (server verifies client cert). We make root require X509.
   mariadb-mtls:
-    image: mariadb:11.4
+    image: mariadb:lts
     container_name: mariadb_mtls_db
-    environment: { MARIADB_ROOT_PASSWORD: "${MARIADB_ROOT_PASSWORD}" }
+    environment:
+      MARIADB_ROOT_PASSWORD: "${MARIADB_ROOT_PASSWORD}"
+      MARIADB_ROOT_HOST: "%"
+    command:
+      - --port=${MARIADB_MTLS_PORT}
+      - --require_secure_transport=ON
+      - --ssl-cert=/certs/server/mariadb_mtls/server.crt
+      - --ssl-key=/certs/server/mariadb_mtls/server.key
+      - --ssl-ca=/certs/ca/ca.crt
+    volumes:
+      - "${CERTS_DIR}:/certs:ro"
+      - ./mariadb/mariadb-mtls:/docker-entrypoint-initdb.d:ro
     networks: [ dbnet ]
 
   mariadb-pkcs11:
-    image: mariadb:11.4
+    image: mariadb:lts
     container_name: mariadb_pkcs11_db
-    environment: { MARIADB_ROOT_PASSWORD: "${MARIADB_ROOT_PASSWORD}" }
-    networks: [ dbnet ]
-
-  mariadb-tls-frontend:
-    build: ./tlsproxy
-    container_name: mariadb_tls_front
     environment:
-      SERVICE_NAME: "mariadb_tls"
-      ACCEPT_PORT: "${MARIADB_TLS_PORT}"
-      CONNECT_HOST: "mariadb_tls_db"
-      CONNECT_PORT: "3306"
-      REQUIRE_CLIENT_CERT: "tls"
-      ENABLE_PKCS11: "0"
-      PKCS11_URI: ""
-    ports: [ "${MARIADB_TLS_PORT}:${MARIADB_TLS_PORT}" ]
-    volumes: [ "${CERTS_DIR}:/certs:ro" ]
+      MARIADB_ROOT_PASSWORD: "${MARIADB_ROOT_PASSWORD}"
+      MARIADB_ROOT_HOST: "%" # autorise root depuis le réseau Docker
     networks: [ dbnet ]
-    depends_on: [ mariadb-tls ]
-
-  mariadb-mtls-frontend:
-    build: ./tlsproxy
-    container_name: mariadb_mtls_front
-    environment:
-      SERVICE_NAME: "mariadb_mtls"
-      ACCEPT_PORT: "${MARIADB_MTLS_PORT}"
-      CONNECT_HOST: "mariadb_mtls_db"
-      CONNECT_PORT: "3306"
-      REQUIRE_CLIENT_CERT: "mtls"
-      ENABLE_PKCS11: "0"
-      PKCS11_URI: ""
-    ports: [ "${MARIADB_MTLS_PORT}:${MARIADB_MTLS_PORT}" ]
-    volumes: [ "${CERTS_DIR}:/certs:ro" ]
-    networks: [ dbnet ]
-    depends_on: [ mariadb-mtls ]
+    healthcheck:
+      test: [ "CMD-SHELL", "mariadb-admin ping -uroot -p$${MARIADB_ROOT_PASSWORD} -h 127.0.0.1 || exit 1" ]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
 
   mariadb-pkcs11-frontend:
     build: ./tlsproxy
@@ -70,16 +70,36 @@ services:
     environment:
       SERVICE_NAME: "mariadb_pkcs11"
       ACCEPT_PORT: "${MARIADB_PKCS11_PORT}"
-      CONNECT_HOST: "mariadb_pkcs11_db"
+      CONNECT_HOST: "mariadb-pkcs11" # <— backend MariaDB (clair)
       CONNECT_PORT: "3306"
-      REQUIRE_CLIENT_CERT: "mtls"
+      REQUIRE_CLIENT_CERT: "mtls" # mTLS côté proxy
       ENABLE_PKCS11: "1"
+      # labels (si ton tlsproxy les utilise) + URI PKCS#11 (clé privée côté HSM)
+      PKCS11_KEY_LABEL: "svc-mariadb"
+      PKCS11_CERT_LABEL: "svc-mariadb-cert"
       PKCS11_URI: "pkcs11:token=${SOFTHSM_TOKEN_LABEL};object=${PKCS11_KEY_LABEL_PREFIX}-mariadb;type=private"
     ports: [ "${MARIADB_PKCS11_PORT}:${MARIADB_PKCS11_PORT}" ]
-    volumes: [ "${CERTS_DIR}:/certs:ro", "softhsm:/var/lib/softhsm" ]
+    volumes:
+      - "${CERTS_DIR}:/certs:ro" # CA + éventuel cert client de test
+      - "softhsm:/var/lib/softhsm" # HSM logiciel (SoftHSMv2)
     networks: [ dbnet ]
-    depends_on: [ mariadb-pkcs11, softhsm ]
+    depends_on:
+      mariadb-pkcs11:
+        condition: service_healthy
 
+  mariadb-pkcs11-client:
+    image: alpine:3.20
+    container_name: mariadb_pkcs11_client
+    command: sh -c "apk add --no-cache stunnel && stunnel /etc/stunnel/stunnel.conf"
+    volumes:
+      - ${CERTS_DIR}:/certs:ro
+      - ./tlsproxy/mariadb-client.conf:/etc/stunnel/stunnel.conf:ro
+    networks: [ dbnet ]
+    depends_on:
+      mariadb-pkcs11-frontend:
+        condition: service_started
+
+  # Seeder unchanged (note: hostnames now point directly to MariaDB for TLS/mTLS)
   seeder-mariadb:
     build: ./seeder
     container_name: seeder_mariadb
@@ -90,20 +110,21 @@ services:
       MAX_TABLES: "${MAX_TABLES}"
       MARIADB_MDP_HOST: "mariadb-mdp"
       MARIADB_MDP_PORT: "3306"
-      MARIADB_TLS_HOST: "mariadb-tls-frontend"
+      MARIADB_TLS_HOST: "mariadb-tls" # <— no frontend
       MARIADB_TLS_PORT: "${MARIADB_TLS_PORT}"
-      MARIADB_MTLS_HOST: "mariadb-mtls-frontend"
+      MARIADB_MTLS_HOST: "mariadb-mtls" # <— no frontend
       MARIADB_MTLS_PORT: "${MARIADB_MTLS_PORT}"
-      MARIADB_PKCS11_HOST: "mariadb-pkcs11-frontend"
+      MARIADB_PKCS11_HOST: "mariadb-pkcs11-client"
       MARIADB_PKCS11_PORT: "${MARIADB_PKCS11_PORT}"
       MARIADB_ROOT_PASSWORD: "${MARIADB_ROOT_PASSWORD}"
       TLS_CA_FILE: "/certs/ca/ca.crt"
       TLS_CLIENT_CERT: "/certs/client/client.crt"
       TLS_CLIENT_KEY: "/certs/client/client.key"
-    volumes: [ "${CERTS_DIR}:/certs:ro" ]
+    volumes:
+      - "${CERTS_DIR}:/certs:ro"
     networks: [ dbnet ]
     depends_on:
       - mariadb-mdp
-      - mariadb-tls-frontend
-      - mariadb-mtls-frontend
+      - mariadb-tls
+      - mariadb-mtls
       - mariadb-pkcs11-frontend
