@@ -16,10 +16,18 @@ chmod 600 "$SSL_DIR/server.key"
 mkdir -p /docker-entrypoint-initdb.d
 pw_sql=$(printf "%s" "$MYSQL_ROOT_PASSWORD" | sed "s/'/''/g")
 cat > /docker-entrypoint-initdb.d/01_root_mtls.sql <<EOF
+-- Compte root global
 CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}';
 ALTER USER 'root'@'%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}';
 GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
 ALTER USER 'root'@'%' REQUIRE X509 PASSWORD EXPIRE NEVER ACCOUNT UNLOCK;
+
+-- Compte root explicite pour ton hôte LAN
+CREATE USER IF NOT EXISTS 'root'@'192.168.1.%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}';
+ALTER USER 'root'@'192.168.1.%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}';
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'192.168.1.%' WITH GRANT OPTION;
+ALTER USER 'root'@'192.168.1.%' REQUIRE X509 PASSWORD EXPIRE NEVER ACCOUNT UNLOCK;
+
 FLUSH PRIVILEGES;
 EOF
 chown -R mysql:mysql /docker-entrypoint-initdb.d
