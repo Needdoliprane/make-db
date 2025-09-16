@@ -8,25 +8,30 @@ INIT_DIR=/etc/mysql/init
 PORT="${MYSQL_TLS_PORT:-3306}"
 
 mkdir -p "$SSL_DIR" "$INIT_DIR"
-cp /ssl-src/ca/ca.crt                    "$SSL_DIR/ca.crt"
-cp /ssl-src/server/mysql_tls/server.crt  "$SSL_DIR/server.crt"
-cp /ssl-src/server/mysql_tls/server.key  "$SSL_DIR/server.key"
+cp /ssl-src/ca/ca.crt                   "$SSL_DIR/ca.crt"
+cp /ssl-src/server/mysql_tls/server.crt "$SSL_DIR/server.crt"
+cp /ssl-src/server/mysql_tls/server.key "$SSL_DIR/server.key"
 chown -R mysql:mysql "$SSL_DIR" "$INIT_DIR"
 chmod 600 "$SSL_DIR/server.key"
 
 pw_sql=$(printf "%s" "$MYSQL_ROOT_PASSWORD" | sed "s/'/''/g")
 
+# Fichier pour init root avec TLS obligatoire (REQUIRE SSL)
 cat > "$INIT_DIR/root_bootstrap.sql" <<EOF
--- Utilisateurs root TLS
+-- Accès global
 CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}';
-ALTER USER 'root'@'%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}';
+ALTER USER 'root'@'%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}' REQUIRE SSL;
 GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
-ALTER USER 'root'@'%' REQUIRE SSL PASSWORD EXPIRE NEVER ACCOUNT UNLOCK;
 
+-- Accès réseau Docker
 CREATE USER IF NOT EXISTS 'root'@'172.%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}';
-ALTER USER 'root'@'172.%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}';
+ALTER USER 'root'@'172.%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}' REQUIRE SSL;
 GRANT ALL PRIVILEGES ON *.* TO 'root'@'172.%' WITH GRANT OPTION;
-ALTER USER 'root'@'172.%' REQUIRE SSL PASSWORD EXPIRE NEVER ACCOUNT UNLOCK;
+
+-- Accès réseau local (poste)
+CREATE USER IF NOT EXISTS 'root'@'192.168.1.%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}';
+ALTER USER 'root'@'192.168.1.%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}' REQUIRE SSL;
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'192.168.1.%' WITH GRANT OPTION;
 
 FLUSH PRIVILEGES;
 EOF
@@ -34,15 +39,12 @@ EOF
 chown mysql:mysql "$INIT_DIR/root_bootstrap.sql"
 chmod 600 "$INIT_DIR/root_bootstrap.sql"
 
-mkdir -p /docker-entrypoint-initdb.d
-cp "$INIT_DIR/root_bootstrap.sql" /docker-entrypoint-initdb.d/01_root_tls.sql
-chown -R mysql:mysql /docker-entrypoint-initdb.d
-
 exec docker-entrypoint.sh mysqld \
   --port="${PORT}" \
-  --ssl_ca=/etc/mysql/ssl/ca.crt \
-  --ssl_cert=/etc/mysql/ssl/server.crt \
-  --ssl_key=/etc/mysql/ssl/server.key \
+  --require_secure_transport=ON \
+  --ssl_ca="$SSL_DIR/ca.crt" \
+  --ssl_cert="$SSL_DIR/server.crt" \
+  --ssl_key="$SSL_DIR/server.key" \
   --tls_version=TLSv1.2,TLSv1.3 \
   --skip-name-resolve \
   --init-file="$INIT_DIR/root_bootstrap.sql"
