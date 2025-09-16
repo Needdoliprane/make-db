@@ -11,18 +11,19 @@ cp /ssl-src/ca/ca.crt                     "$SSL_DIR/ca.crt"
 cp /ssl-src/server/mysql_mtls/server.crt  "$SSL_DIR/server.crt"
 cp /ssl-src/server/mysql_mtls/server.key  "$SSL_DIR/server.key"
 chown -R mysql:mysql "$SSL_DIR"
+chmod 644 "$SSL_DIR/ca.crt" "$SSL_DIR/server.crt"
 chmod 600 "$SSL_DIR/server.key"
 
 pw_sql=$(printf "%s" "$MYSQL_ROOT_PASSWORD" | sed "s/'/''/g")
 
-# Utiliser uniquement docker-entrypoint-initdb.d (pas d'init-file)
 mkdir -p /docker-entrypoint-initdb.d
 cat > /docker-entrypoint-initdb.d/01_root_mtls.sql <<EOF
--- Créer l'utilisateur root@'%' s'il n'existe pas, sinon le modifier
-CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY '${pw_sql}';
-ALTER USER 'root'@'%' IDENTIFIED BY '${pw_sql}';
+-- root@% + mTLS obligatoire (REQUIRE X509)
+CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}';
+ALTER USER 'root'@'%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}';
 GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
 ALTER USER 'root'@'%' REQUIRE X509;
+ALTER USER 'root'@'%' PASSWORD EXPIRE NEVER ACCOUNT UNLOCK;
 FLUSH PRIVILEGES;
 EOF
 chown -R mysql:mysql /docker-entrypoint-initdb.d
@@ -30,8 +31,8 @@ chown -R mysql:mysql /docker-entrypoint-initdb.d
 exec docker-entrypoint.sh mysqld \
   --port="${PORT}" \
   --require_secure_transport=ON \
-  --ssl_ca=/etc/mysql/ssl/ca.crt \
-  --ssl_cert=/etc/mysql/ssl/server.crt \
-  --ssl_key=/etc/mysql/ssl/server.key \
+  --ssl_ca="${SSL_DIR}/ca.crt" \
+  --ssl_cert="${SSL_DIR}/server.crt" \
+  --ssl_key="${SSL_DIR}/server.key" \
   --tls_version=TLSv1.2,TLSv1.3 \
   --skip-name-resolve
