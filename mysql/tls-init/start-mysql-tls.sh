@@ -17,17 +17,16 @@ chmod 600 "$SSL_DIR/server.key"
 pw_sql=$(printf "%s" "$MYSQL_ROOT_PASSWORD" | sed "s/'/''/g")
 
 cat > "$INIT_DIR/root_bootstrap.sql" <<EOF
--- Compte root global
+-- Utilisateurs root TLS
 CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}';
 ALTER USER 'root'@'%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}';
 GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
 ALTER USER 'root'@'%' REQUIRE SSL PASSWORD EXPIRE NEVER ACCOUNT UNLOCK;
 
--- Compte root explicite pour ton hôte LAN
-CREATE USER IF NOT EXISTS 'root'@'192.168.1.%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}';
-ALTER USER 'root'@'192.168.1.%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}';
-GRANT ALL PRIVILEGES ON *.* TO 'root'@'192.168.1.%' WITH GRANT OPTION;
-ALTER USER 'root'@'192.168.1.%' REQUIRE SSL PASSWORD EXPIRE NEVER ACCOUNT UNLOCK;
+CREATE USER IF NOT EXISTS 'root'@'172.%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}';
+ALTER USER 'root'@'172.%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}';
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'172.%' WITH GRANT OPTION;
+ALTER USER 'root'@'172.%' REQUIRE SSL PASSWORD EXPIRE NEVER ACCOUNT UNLOCK;
 
 FLUSH PRIVILEGES;
 EOF
@@ -36,19 +35,7 @@ chown mysql:mysql "$INIT_DIR/root_bootstrap.sql"
 chmod 600 "$INIT_DIR/root_bootstrap.sql"
 
 mkdir -p /docker-entrypoint-initdb.d
-cat > /docker-entrypoint-initdb.d/01_root_tls.sql <<EOF
-CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}';
-ALTER USER 'root'@'%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}';
-GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
-ALTER USER 'root'@'%' REQUIRE SSL PASSWORD EXPIRE NEVER ACCOUNT UNLOCK;
-
-CREATE USER IF NOT EXISTS 'root'@'192.168.1.%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}';
-ALTER USER 'root'@'192.168.1.%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}';
-GRANT ALL PRIVILEGES ON *.* TO 'root'@'192.168.1.%' WITH GRANT OPTION;
-ALTER USER 'root'@'192.168.1.%' REQUIRE SSL PASSWORD EXPIRE NEVER ACCOUNT UNLOCK;
-
-FLUSH PRIVILEGES;
-EOF
+cp "$INIT_DIR/root_bootstrap.sql" /docker-entrypoint-initdb.d/01_root_tls.sql
 chown -R mysql:mysql /docker-entrypoint-initdb.d
 
 exec docker-entrypoint.sh mysqld \
