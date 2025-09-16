@@ -36,11 +36,12 @@ services:
 
   # --- PostgreSQL mTLS natif (pas de proxy) ---
   pg-mtls:
-    build: ./postgres-ssl
+    build: ./postgres-mtls
     environment:
       POSTGRES_USER: "${POSTGRES_USER}"
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
       REQUIRE_CLIENT_CERT: "1"
+      CERT_PROFILE: "pg_mtls"
     volumes:
       - "./certs/:/certs:ro"
     ports: [ "${PG_MTLS_PORT}:5432" ]
