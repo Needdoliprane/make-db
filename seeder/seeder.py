@@ -12,7 +12,7 @@ from faker import Faker
 from psycopg2 import OperationalError, sql
 from psycopg2.extras import Json
 from pymongo import MongoClient
-from pymongo.errors import ServerSelectionTimeoutError
+from pymongo.errors import OperationFailure, ServerSelectionTimeoutError
 
 fake = Faker()
 
@@ -26,7 +26,7 @@ MAX_TABLES = int(os.getenv("MAX_TABLES", "10"))
 TLS_CA_FILE = os.getenv("TLS_CA_FILE", "/certs/ca/ca.crt")
 TLS_CLIENT_CERT = os.getenv("TLS_CLIENT_CERT", "/certs/client/client.crt")
 TLS_CLIENT_KEY = os.getenv("TLS_CLIENT_KEY", "/certs/client/client.key")
-TLS_CLIENT_PEM = os.getenv("TLS_CLIENT_PEM", "/certs/client/client.pem")  # << NEW
+TLS_CLIENT_PEM = os.getenv("TLS_CLIENT_PEM", "/certs/client/client.pem")  # cert+key concaténés (PEM)
 
 # --- PKCS#11 hosts (frontend = terminator côté serveur ; client = tunnel côté client) ---
 PKCS11_FRONTEND_HOST = os.getenv("PG_PKCS11_HOST", "pg-pkcs11-frontend")
@@ -470,18 +470,27 @@ def seed_mongo_variant(name, host, port, mtls=False):
                             "opt": random.choice([None, fake.sentence(), fake.url()]),
                         }
                     )
-                res = coll.insert_many(docs, ordered=False)
+                coll.insert_many(docs, ordered=False)
                 written = coll.estimated_document_count()
                 if written < RECORDS_PER_DB:
                     raise RuntimeError(
                         f"[Mongo:{name}] {dbn}.{cname} n'a que {written} docs (< {RECORDS_PER_DB})"
                     )
-            # Petit fsync pour être sûr que 'show dbs' remontent tout de suite
-            db.command({"fsync": 1})
+
+            # fsync doit être exécuté sur la DB admin (et peut être refusé). On ignore proprement si non autorisé.
+            try:
+                client.admin.command({"fsync": 1})
+            except OperationFailure as e:
+                print(f"[Mongo:{name}] fsync ignoré: {e.details.get('errmsg', str(e))}", flush=True)
+
             print(f"[Mongo:{name}] Seeded {dbn} (collections={coln})")
+
         # Inventaire final
-        dbs = [d["name"] for d in client.admin.command("listDatabases")["databases"]]
-        print(f"[Mongo:{name}] listDatabases -> {dbs}", flush=True)
+        try:
+            dbs = [d["name"] for d in client.admin.command("listDatabases")["databases"]]
+            print(f"[Mongo:{name}] listDatabases -> {dbs}", flush=True)
+        except Exception as e:
+            print(f"[Mongo:{name}] listDatabases error: {e}", flush=True)
     finally:
         client.close()
 
