@@ -14,21 +14,23 @@ cp /ssl-src/server/mysql_mtls/server.key   "$SSL_DIR/server.key"
 chown -R mysql:mysql "$SSL_DIR" "$INIT_DIR"
 chmod 600 "$SSL_DIR/server.key"
 
+# Échappe les quotes pour SQL
 pw_sql=$(printf "%s" "$MYSQL_ROOT_PASSWORD" | sed "s/'/''/g")
 
-# Fichier pour init root avec mTLS obligatoire (REQUIRE X509)
+# IMPORTANT :
+# - Ne plus faire CREATE USER pour 'root'@'%' (l'entrypoint l’a déjà créé via MYSQL_ROOT_HOST=%)
+# - On fait ALTER USER IF EXISTS pour lui imposer REQUIRE X509
+# - On garde la création des comptes 'root'@'172.%' et 'root'@'192.168.1.%' (REQUIRE X509)
 cat > "$INIT_DIR/root_bootstrap.sql" <<EOF
--- Accès global
-CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}';
-ALTER USER 'root'@'%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}' REQUIRE X509;
-GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
+-- Renforce le compte déjà créé par l'entrypoint
+ALTER USER IF EXISTS 'root'@'%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}' REQUIRE X509;
 
--- Accès réseau Docker
+-- Accès réseau Docker (mTLS obligatoire)
 CREATE USER IF NOT EXISTS 'root'@'172.%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}';
 ALTER USER 'root'@'172.%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}' REQUIRE X509;
 GRANT ALL PRIVILEGES ON *.* TO 'root'@'172.%' WITH GRANT OPTION;
 
--- Accès réseau local (poste)
+-- Accès réseau local (poste) (mTLS obligatoire)
 CREATE USER IF NOT EXISTS 'root'@'192.168.1.%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}';
 ALTER USER 'root'@'192.168.1.%' IDENTIFIED WITH caching_sha2_password BY '${pw_sql}' REQUIRE X509;
 GRANT ALL PRIVILEGES ON *.* TO 'root'@'192.168.1.%' WITH GRANT OPTION;
