@@ -12,7 +12,7 @@ from faker import Faker
 from psycopg2 import OperationalError, sql
 from psycopg2.extras import Json
 from pymongo import MongoClient
-from tenacity import retry, stop_after_attempt, wait_fixed
+from pymongo.errors import ServerSelectionTimeoutError
 
 fake = Faker()
 
@@ -26,6 +26,7 @@ MAX_TABLES = int(os.getenv("MAX_TABLES", "10"))
 TLS_CA_FILE = os.getenv("TLS_CA_FILE", "/certs/ca/ca.crt")
 TLS_CLIENT_CERT = os.getenv("TLS_CLIENT_CERT", "/certs/client/client.crt")
 TLS_CLIENT_KEY = os.getenv("TLS_CLIENT_KEY", "/certs/client/client.key")
+TLS_CLIENT_PEM = os.getenv("TLS_CLIENT_PEM", "/certs/client/client.pem")  # << NEW
 
 # --- PKCS#11 hosts (frontend = terminator côté serveur ; client = tunnel côté client) ---
 PKCS11_FRONTEND_HOST = os.getenv("PG_PKCS11_HOST", "pg-pkcs11-frontend")
@@ -144,7 +145,6 @@ def gen_schema(engine: str):
 
 
 # ---------- PostgreSQL ----------
-@retry(stop=stop_after_attempt(5), wait=wait_fixed(1))
 def pg_conn(host, port, dbname):
     """
     Politique TLS par variante :
@@ -410,41 +410,80 @@ def seed_mysql_like(label, host, port, root_pw_env, engine_key):
 
 # ---------- MongoDB ----------
 def mongo_client(host, port, mtls=False):
-    uri = f"mongodb://{os.getenv('MONGO_INITDB_ROOT_USERNAME','admin')}:{os.getenv('MONGO_INITDB_ROOT_PASSWORD','adminpwd')}@{host}:{port}/?authSource=admin"
-    kwargs = {}
-    if host.endswith("tls") or host.endswith("mtls"):
+    uri = (
+        f"mongodb://{os.getenv('MONGO_INITDB_ROOT_USERNAME','admin')}:"
+        f"{os.getenv('MONGO_INITDB_ROOT_PASSWORD','adminpwd')}"
+        f"@{host}:{port}/?authSource=admin"
+    )
+    kwargs = dict(
+        serverSelectionTimeoutMS=3000,
+        connectTimeoutMS=5000,
+        socketTimeoutMS=60000,
+        retryWrites=True,
+    )
+    needs_tls = host.endswith(("tls", "mtls"))
+    if needs_tls:
         kwargs["tls"] = True
         kwargs["tlsCAFile"] = TLS_CA_FILE
         if mtls:
-            kwargs["tlsCertificateKeyFile"] = TLS_CLIENT_CERT
-    return MongoClient(uri, **kwargs)
-
+            # Utiliser le PEM (cert + key) exactement comme dans tes healthchecks
+            pem = TLS_CLIENT_PEM if os.path.exists(TLS_CLIENT_PEM) else None
+            if not pem:
+                raise RuntimeError(
+                    f"client.pem introuvable ({TLS_CLIENT_PEM}). "
+                    "Génère un PEM (cert+key concaténés) et monte-le dans le seeder."
+                )
+            kwargs["tlsCertificateKeyFile"] = pem
+    try:
+        cli = MongoClient(uri, **kwargs)
+        # Force la résolution immédiate sinon PyMongo diffère la sélection
+        cli.admin.command("ping")
+        return cli
+    except ServerSelectionTimeoutError as e:
+        print(f"[Mongo] ServerSelectionTimeoutError host={host}:{port} -> {e}", flush=True)
+        raise
 
 def seed_mongo_variant(name, host, port, mtls=False):
     client = mongo_client(host, port, mtls=mtls)
-    for i in range(1, DB_COUNT + 1):
-        dbn = f"mg_{name}_{i}"
-        db = client[dbn]
-        coln = random.randint(MIN_TABLES, MAX_TABLES)
-        for j in range(1, coln + 1):
-            cname = f"{rnd_word()}_{j}"
-            coll = db[cname]
-            docs = []
-            for _ in range(RECORDS_PER_DB):
-                docs.append(
-                    {
-                        "name": fake.name(),
-                        "email": fake.email(),
-                        "qty": random.randint(1, 50),
-                        "price": round(random.uniform(1, 9999), 2),
-                        "ts": str(fake.date_time()),
-                        "tags": [rnd_word(5) for _ in range(random.randint(1, 5))],
-                        "opt": random.choice([None, fake.sentence(), fake.url()]),
-                    }
-                )
-            coll.insert_many(docs)
-        print(f"[Mongo:{name}] Seeded {dbn}")
-    client.close()
+    try:
+        for i in range(1, DB_COUNT + 1):
+            dbn = f"mg_{name}_{i}"
+            db = client[dbn]
+            coln = random.randint(MIN_TABLES, MAX_TABLES)
+            for j in range(1, coln + 1):
+                cname = f"{rnd_word()}_{j}"
+                # Force la création explicite
+                if cname not in db.list_collection_names():
+                    db.create_collection(cname)
+                coll = db[cname]
+
+                docs = []
+                for _ in range(RECORDS_PER_DB):
+                    docs.append(
+                        {
+                            "name": fake.name(),
+                            "email": fake.email(),
+                            "qty": random.randint(1, 50),
+                            "price": round(random.uniform(1, 9999), 2),
+                            "ts": str(fake.date_time()),
+                            "tags": [rnd_word(5) for _ in range(random.randint(1, 5))],
+                            "opt": random.choice([None, fake.sentence(), fake.url()]),
+                        }
+                    )
+                res = coll.insert_many(docs, ordered=False)
+                written = coll.estimated_document_count()
+                if written < RECORDS_PER_DB:
+                    raise RuntimeError(
+                        f"[Mongo:{name}] {dbn}.{cname} n'a que {written} docs (< {RECORDS_PER_DB})"
+                    )
+            # Petit fsync pour être sûr que 'show dbs' remontent tout de suite
+            db.command({"fsync": 1})
+            print(f"[Mongo:{name}] Seeded {dbn} (collections={coln})")
+        # Inventaire final
+        dbs = [d["name"] for d in client.admin.command("listDatabases")["databases"]]
+        print(f"[Mongo:{name}] listDatabases -> {dbs}", flush=True)
+    finally:
+        client.close()
 
 
 def main():
